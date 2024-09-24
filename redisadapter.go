@@ -17,12 +17,16 @@ import (
 	"gitlab.com/fruitygo/gojuice/juice/logjuice"
 )
 
+// ------------------------------
+// TYPES
+// ------------------------------
+
 type Adapter struct {
 	logger    util.LoggerPort
 	FS        embed.FS
 	redisHost string
-	cfg       RedisClientConfig
 	client    *redis.Client
+	cfg       RedisClientConfig
 }
 
 // RedisClientConfig represents the configuration for the Redis client.
@@ -45,12 +49,30 @@ type RedisClientConfig struct {
 //
 // Example: To connect without mutual TLS, set MutualTLS to `false` and leave the Cert, Key, and CA fields empty.
 type Socket struct {
-	Port      int    // Redis port number (required)
-	MutualTLS bool   // Enable mutual TLS (set to `false` if TLS is not required)
-	Cert      string // Client certificate file path (required only if MutualTLS is `true`)
-	Key       string // Client key file path (required only if MutualTLS is `true`)
-	CA        string // CA file path (required only if MutualTLS is `true`)
+	Cert      string
+	Key       string
+	CA        string
+	Port      int
+	MutualTLS bool
 }
+
+// ------------------------------
+// FUNCS
+// ------------------------------
+
+func NewAdapter(l util.LoggerPort, FS embed.FS, host string, cfg RedisClientConfig) *Adapter {
+	return &Adapter{
+		logger:    l,
+		FS:        FS,
+		redisHost: host,
+		cfg:       cfg,
+		client:    nil,
+	}
+}
+
+// ------------------------------
+// METHODS
+// ------------------------------
 
 // GetClient returns the Redis client.
 func (a *Adapter) GetClient() *redis.Client {
@@ -65,7 +87,7 @@ func (a *Adapter) SetClient(ctx context.Context) error {
 
 	// Validate required config values.
 	if a.redisHost == "" || a.cfg.Socket.Port == 0 {
-		return fmt.Errorf("Redis host and port must be set")
+		return fmt.Errorf("redis host and port must be set")
 	}
 
 	// Build Redis options.
@@ -77,7 +99,7 @@ func (a *Adapter) SetClient(ctx context.Context) error {
 	}
 
 	// Retrieve mutual TLS config.
-	if a.cfg.Socket.TLS {
+	if a.cfg.Socket.MutualTLS {
 		tlsConfig, err := a.getTLSConfig()
 		if err != nil {
 			return err
@@ -141,12 +163,6 @@ func (a *Adapter) getTLSConfig() (*tls.Config, error) {
 func (a *Adapter) Close(ctx context.Context) error {
 	if a.client == nil {
 		return nil
-	}
-
-	// Attempt to ping the Redis server before closing the client.
-	_, err := a.client.Ping(ctx).Result()
-	if err != nil {
-		return err
 	}
 
 	// Close the client.
