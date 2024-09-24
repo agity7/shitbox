@@ -1,8 +1,6 @@
 // This file contains code used to interact with Redis in Fabriktor.
 // It follows the port and adapter approach.
-// Fabriktor has since discarded this code because mutual TLS is not required,
-// but this adapter implements mutual TLS.
-package redisadapter
+package redis
 
 import (
 	"context"
@@ -39,20 +37,27 @@ type RedisClientConfig struct {
 //
 // Fields:
 // - Port: The port number for the Redis connection. This is required.
+// - UseTLS: A boolean flag indicating whether TLS is required for the connection.
+//   - Set this to `true` to enable TLS. This will configure the client to use TLS when connecting to Redis.
+//   - If `false`, no TLS will be used.
+//
 // - MutualTLS: A boolean flag indicating whether mutual TLS is required for the connection.
-//   - To disable mutual TLS, set this to `false`. No certificates will be needed.
-//   - If `true`, the Cert, Key, and CA fields must be set for mutual TLS.
+//   - If `true`, both the client and server will authenticate each other using certificates.
+//   - If `false`, only server-side TLS will be used (client will verify the server certificate but won't send its own).
 //
 // - Cert: Path to the client certificate file (only required when MutualTLS is `true`).
 // - Key: Path to the client key file (only required when MutualTLS is `true`).
-// - CA: Path to the certificate authority file (only required when MutualTLS is `true`).
+// - CA: Path to the certificate authority file (required if MutualTLS is `true`).
 //
-// Example: To connect without mutual TLS, set MutualTLS to `false` and leave the Cert, Key, and CA fields empty.
+// Example:
+// - To connect using TLS but without mutual authentication, set `UseTLS` to `true` and `MutualTLS` to `false`.
+// - To connect without any TLS, set `UseTLS` to `false`.
 type Socket struct {
 	Cert      string
 	Key       string
 	CA        string
 	Port      int
+	UseTLS    bool
 	MutualTLS bool
 }
 
@@ -98,14 +103,22 @@ func (a *Adapter) SetClient(ctx context.Context) error {
 		Username: config.RedisUsername,
 	}
 
-	// Retrieve mutual TLS config.
-	if a.cfg.Socket.MutualTLS {
-		tlsConfig, err := a.getTLSConfig()
-		if err != nil {
-			return err
-		}
+	// Configure TLS if UseTLS is enabled.
+	if a.cfg.Socket.UseTLS {
+		if a.cfg.Socket.MutualTLS {
+			tlsConfig, err := a.getMutualTLSConfig()
+			if err != nil {
+				return err
+			}
 
-		options.TLSConfig = tlsConfig
+			options.TLSConfig = tlsConfig
+		} else {
+			// Use regular TLS without client certs (server cert only).
+			options.TLSConfig = &tls.Config{
+				InsecureSkipVerify: false,
+				MinVersion:         tls.VersionTLS12,
+			}
+		}
 	}
 
 	// Set the Redis client in the adapter.
@@ -122,8 +135,8 @@ func (a *Adapter) SetClient(ctx context.Context) error {
 	return nil
 }
 
-// getTLSConfig returns the TLS configuration.
-func (a *Adapter) getTLSConfig() (*tls.Config, error) {
+// getMutualTLSConfig returns the TLS configuration for mutual TLS.
+func (a *Adapter) getMutualTLSConfig() (*tls.Config, error) {
 	// Read the certificate file from the embedded file system.
 	certData, err := a.FS.ReadFile(a.cfg.Socket.Cert)
 	if err != nil {
